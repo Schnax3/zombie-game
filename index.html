@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>PROJECT ZOMBIE – Live-Karten-Überlebensspiel</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Share+Tech+Mono&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0d09;
+  --panel:#15170f;
+  --panel-2:#1c1f15;
+  --line:#3a3d28;
+  --olive:#5c6b3f;
+  --olive-bright:#9bbf4f;
+  --danger:#e0392c;
+  --danger-dim:#7a2a23;
+  --loot:#e3b23c;
+  --player:#4aa8ff;
+  --text:#ece8d8;
+  --text-dim:#9c9886;
+  --font-display:'Black Ops One', sans-serif;
+  --font-mono:'Share Tech Mono', monospace;
+  --font-body:'Inter', system-ui, sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{
+  margin:0; height:100%; width:100%; overflow:hidden; position:fixed;
+  background:var(--bg); color:var(--text); font-family:var(--font-body);
+  -webkit-tap-highlight-color:transparent;
+}
+#map{position:absolute; inset:0; background:#0a0c07;}
+.leaflet-control-attribution{background:rgba(10,12,7,.7)!important; color:var(--text-dim)!important; font-size:9px!important;}
+.leaflet-control-attribution a{color:var(--olive-bright)!important;}
+.leaflet-control-zoom a{background:var(--panel)!important; color:var(--text)!important; border-color:var(--line)!important;}
+.leaflet-marker-icon{transition: transform 260ms linear;}
+
+/* ---------- markers ---------- */
+.pz-player{position:relative; width:26px; height:26px;}
+.pz-player-dot{position:absolute; left:7px; top:7px; width:12px; height:12px; border-radius:50%; background:var(--player); border:2px solid #fff; box-shadow:0 0 8px rgba(74,168,255,.9); z-index:2;}
+.pz-player-pulse{position:absolute; left:0; top:0; width:26px; height:26px; border-radius:50%; background:rgba(74,168,255,.35); animation:pzPulse 2s ease-out infinite;}
+@keyframes pzPulse{0%{transform:scale(.4); opacity:.9;}100%{transform:scale(1.8); opacity:0;}}
+
+.pz-zombie{width:26px; height:26px; border-radius:50%; background:radial-gradient(circle at 35% 35%, #ff6a55, var(--danger) 60%, var(--danger-dim) 100%); display:flex; align-items:center; justify-content:center; font-size:14px; box-shadow:0 0 10px rgba(224,57,44,.85), 0 0 0 2px rgba(0,0,0,.4); animation:pzZombiePulse 1.4s ease-in-out infinite;}
+@keyframes pzZombiePulse{0%,100%{box-shadow:0 0 6px rgba(224,57,44,.7);}50%{box-shadow:0 0 16px rgba(224,57,44,1);}}
+
+.pz-loot{width:24px; height:24px; border-radius:50%; background:radial-gradient(circle at 35% 35%, #ffe49a, var(--loot) 65%, #8a6418 100%); display:flex; align-items:center; justify-content:center; font-size:13px; box-shadow:0 0 10px rgba(227,178,60,.85); animation:pzLootBob 1.8s ease-in-out infinite;}
+@keyframes pzLootBob{0%,100%{transform:translateY(0);}50%{transform:translateY(-4px);}}
+
+.pz-start-pin{width:22px; height:22px; border-radius:50% 50% 50% 0; transform:rotate(-45deg); background:var(--olive-bright); border:2px solid #fff;}
+
+/* ---------- top HUD ---------- */
+#hud-bar{
+  position:fixed; top:0; left:0; right:0; z-index:500;
+  display:none; gap:8px; padding:10px 10px 14px; padding-top:max(10px, env(safe-area-inset-top));
+  background:linear-gradient(to bottom, rgba(8,9,5,.92), rgba(8,9,5,0));
+  pointer-events:none;
+}
+body[data-status="playing"] #hud-bar, body[data-status="paused"] #hud-bar{display:flex;}
+.hud-chip{
+  pointer-events:auto;
+  background:rgba(21,23,15,.85); border:1px solid var(--line); border-radius:8px;
+  padding:6px 10px; font-family:var(--font-mono); font-size:13px; display:flex; align-items:center; gap:6px;
+  backdrop-filter:blur(2px);
+}
+.hud-spacer{flex:1;}
+#hearts{letter-spacing:2px;}
+#pauseBtn{pointer-events:auto; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:6px 12px; font-family:var(--font-mono); font-size:13px; cursor:pointer;}
+#pauseBtn:active{background:var(--panel-2);}
+
+/* ---------- toasts ---------- */
+#toast-container{position:fixed; top:max(64px, calc(env(safe-area-inset-top) + 54px)); left:0; right:0; z-index:700; display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none;}
+.toast{
+  font-family:var(--font-body); font-size:13px; font-weight:600; padding:8px 14px; border-radius:7px;
+  background:rgba(20,22,14,.95); border:1px solid var(--line); color:var(--text);
+  animation:pzToastIn .25s ease-out, pzToastOut .4s ease-in 2.6s forwards;
+  max-width:86vw; text-align:center; box-shadow:0 4px 14px rgba(0,0,0,.4);
+}
+.toast.success{border-color:var(--olive-bright); color:var(--olive-bright);}
+.toast.danger{border-color:var(--danger); color:#ff8278;}
+.toast.warn{border-color:var(--loot); color:var(--loot);}
+@keyframes pzToastIn{from{opacity:0; transform:translateY(-10px);}to{opacity:1; transform:translateY(0);}}
+@keyframes pzToastOut{to{opacity:0; transform:translateY(-6px);}}
+
+/* ---------- danger flash ---------- */
+#danger-flash{position:fixed; inset:0; background:rgba(224,57,44,0); pointer-events:none; z-index:650; transition:background .15s;}
+#danger-flash.flash{background:rgba(224,57,44,.35);}
+
+/* ---------- top-left buttons ---------- */
+.round-btn{
+  width:34px; height:34px; border-radius:50%; background:var(--panel); border:1px solid var(--line);
+  color:var(--olive-bright); font-family:var(--font-mono); font-weight:700; cursor:pointer; font-size:15px;
+}
+#infoBtn{position:fixed; top:max(10px, env(safe-area-inset-top)); left:10px; z-index:500;}
+#themeBtn{position:fixed; top:max(10px, env(safe-area-inset-top)); left:54px; z-index:500;}
+#legend{
+  position:fixed; top:54px; left:10px; z-index:500; background:var(--panel); border:1px solid var(--line);
+  border-radius:8px; padding:10px 12px; font-size:12px; line-height:1.7; display:none; max-width:230px;
+}
+#legend.open{display:block;}
+.legend-row{display:flex; align-items:center; gap:8px;}
+.legend-dot{width:14px; height:14px; border-radius:50%; flex-shrink:0;}
+
+/* ---------- joystick ---------- */
+#joyWrap{position:fixed; left:18px; bottom:max(18px, env(safe-area-inset-bottom)); z-index:520; display:none;}
+body[data-status="playing"][data-mode="sim"] #joyWrap{display:block;}
+#joyBase{
+  width:108px; height:108px; border-radius:50%; background:rgba(21,23,15,.55);
+  border:2px solid var(--line); touch-action:none; position:relative;
+}
+#joyKnob{
+  width:46px; height:46px; border-radius:50%; background:rgba(155,191,79,.85); border:2px solid var(--olive-bright);
+  position:absolute; left:31px; top:31px; transition:transform .03s linear;
+}
+
+/* ---------- menu sheet ---------- */
+#sheet{
+  position:fixed; left:0; right:0; bottom:0; z-index:600;
+  background:var(--panel); border-top:1px solid var(--line);
+  border-radius:16px 16px 0 0; max-height:78vh; overflow-y:auto;
+  transform:translateY(0); transition:transform .3s ease;
+  padding:10px 16px max(20px, env(safe-area-inset-bottom));
+  box-shadow:0 -8px 30px rgba(0,0,0,.5);
+}
+body[data-status="playing"] #sheet{transform:translateY(100%);}
+#sheetHandle{width:100%; display:flex; justify-content:center; padding:6px 0 10px;}
+#sheetHandle .bar{width:42px; height:4px; border-radius:3px; background:var(--line);}
+#reopenTab{
+  position:fixed; right:14px; bottom:max(14px, env(safe-area-inset-bottom)); z-index:610;
+  background:var(--olive); color:#0b0d09; border:none; border-radius:50%; width:48px; height:48px;
+  font-size:20px; display:none; box-shadow:0 4px 14px rgba(0,0,0,.5);
+}
+body[data-status="playing"] #reopenTab{display:block;}
+
+h1.title{font-family:var(--font-display); font-size:22px; letter-spacing:1px; color:var(--olive-bright); margin:4px 0 2px; text-shadow:0 0 12px rgba(155,191,79,.4);}
+.subtitle{font-family:var(--font-mono); font-size:11px; color:var(--text-dim); margin:0 0 12px; letter-spacing:.5px;}
+.best-line{font-family:var(--font-mono); font-size:11px; color:var(--loot); margin:0 0 10px;}
+
+.section-label{font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:1.5px; color:var(--olive-bright); margin:16px 0 8px; border-bottom:1px solid var(--line); padding-bottom:4px;}
+
+.preset-row{display:flex; gap:8px; flex-wrap:wrap;}
+.btn-toggle{
+  flex:1; min-width:90px; background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+  padding:10px 6px; border-radius:9px; font-family:var(--font-body); font-weight:600; font-size:13px; cursor:pointer;
+  text-align:center;
+}
+.btn-toggle.active{background:var(--olive); border-color:var(--olive-bright); color:#0b0d09;}
+.btn-toggle.danger-active.active{background:var(--danger); border-color:#ff8278; color:#fff;}
+
+.row{display:flex; align-items:center; justify-content:space-between; gap:10px; margin:10px 0;}
+.row label{font-size:13px; color:var(--text);}
+.row .val{font-family:var(--font-mono); font-size:12px; color:var(--olive-bright); min-width:54px; text-align:right;}
+input[type=range]{flex:1; accent-color:var(--olive-bright); height:4px;}
+
+.check-row{display:flex; align-items:center; gap:10px; margin:14px 0;}
+.check-row label{font-size:13px; color:var(--text); cursor:pointer;}
+.pz-checkbox{
+  width:22px; height:22px; flex-shrink:0; cursor:pointer; accent-color:var(--olive-bright);
+  background:var(--panel-2); border:1px solid var(--line);
+}
+.hint{font-size:11px; color:var(--text-dim); margin-top:2px;}
+
+#advToggle{background:none; border:none; color:var(--text-dim); font-family:var(--font-mono); font-size:11px; cursor:pointer; padding:6px 0; text-decoration:underline;}
+#advBody{display:none;}
+#advBody.open{display:block;}
+
+#startBtn{
+  width:100%; margin-top:16px; padding:14px; border:none; border-radius:10px; cursor:pointer;
+  background:var(--olive-bright); color:#0b0d09; font-family:var(--font-display); font-size:16px; letter-spacing:1px;
+  box-shadow:0 4px 16px rgba(155,191,79,.3);
+}
+#startBtn:disabled{opacity:.6;}
+.btn-row2{display:flex; gap:10px; margin-top:10px;}
+.btn-row2 button{flex:1; padding:12px; border-radius:10px; font-family:var(--font-body); font-weight:600; cursor:pointer; border:1px solid var(--line);}
+.btn-secondary{background:var(--panel-2); color:var(--text);}
+.btn-quit{background:transparent; color:var(--danger); border-color:var(--danger-dim);}
+
+/* ---------- result overlay ---------- */
+#overlay-result{
+  position:fixed; inset:0; z-index:900; display:none; align-items:center; justify-content:center;
+  background:rgba(8,9,5,.86); padding:20px;
+}
+#overlay-result.open{display:flex;}
+.result-card{
+  background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:26px 22px; max-width:340px; width:100%;
+  text-align:center;
+}
+.result-card h2{font-family:var(--font-display); font-size:24px; margin:0 0 4px;}
+.result-card.win h2{color:var(--olive-bright); text-shadow:0 0 14px rgba(155,191,79,.5);}
+.result-card.lose h2{color:var(--danger); text-shadow:0 0 14px rgba(224,57,44,.5);}
+.result-stats{font-family:var(--font-mono); font-size:13px; color:var(--text-dim); margin:14px 0; line-height:1.8;}
+.result-stats b{color:var(--text);}
+
+@media (min-width: 760px){
+  #sheet{left:auto; width:380px; top:0; bottom:0; height:100%; border-radius:0; max-height:none; border-top:none; border-left:1px solid var(--line); transform:translateX(0);}
+  body[data-status="playing"] #sheet{transform:translateX(100%);}
+  #sheetHandle{display:none;}
+  #reopenTab{right:18px; top:max(18px, env(safe-area-inset-top)); bottom:auto;}
+}
+</style>
+</head>
+<body data-status="menu" data-mode="sim">
+
+<div id="map"></div>
+<div id="danger-flash"></div>
+
+<button id="infoBtn" class="round-btn" title="Legende">i</button>
+<button id="themeBtn" class="round-btn" title="Kartenstil wechseln">🌙</button>
+<div id="legend">
+  <div class="legend-row"><span class="legend-dot" style="background:var(--player); box-shadow:0 0 6px var(--player);"></span> Du</div>
+  <div class="legend-row"><span class="legend-dot" style="background:var(--danger);"></span> Zombie</div>
+  <div class="legend-row"><span class="legend-dot" style="background:var(--loot);"></span> Loot</div>
+  <div class="legend-row"><span class="legend-dot" style="background:var(--olive-bright); border-radius:4px;"></span> Startpunkt</div>
+  <div style="margin-top:8px; color:var(--text-dim);">Tippe im Menü auf die Karte, um deinen Startpunkt zu setzen. Im Spiel (Simulation) bewegst du dich per Joystick, Pfeiltasten/WASD oder durch Antippen der Karte.</div>
+</div>
+
+<div id="hud-bar">
+  <div class="hud-chip">🎒 <b id="hudLoot">0/5</b></div>
+  <div class="hud-chip" id="hearts">❤️❤️❤️</div>
+  <div class="hud-chip" id="hudTimer">00:00</div>
+  <div class="hud-spacer"></div>
+  <button id="pauseBtn">⏸</button>
+</div>
+
+<div id="toast-container"></div>
+
+<div id="joyWrap"><div id="joyBase"><div id="joyKnob"></div></div></div>
+
+<button id="reopenTab">⚙</button>
+
+<div id="sheet">
+  <div id="sheetHandle"><div class="bar"></div></div>
+
+  <div id="menuView">
+    <h1 class="title">PROJECT ZOMBIE</h1>
+    <p class="subtitle">LIVE-KARTEN-ÜBERLEBENSSPIEL // SAMMLE LOOT // MEIDE DIE TOTEN</p>
+    <p class="best-line" id="bestLine" style="display:none;"></p>
+
+    <div class="section-label">Bewegungsart</div>
+    <div class="preset-row">
+      <button class="btn-toggle" data-preset="walk">🚶 Gehen</button>
+      <button class="btn-toggle" data-preset="jog">🏃 Joggen</button>
+      <button class="btn-toggle" data-preset="bike">🚴 Radfahren</button>
+    </div>
+
+    <div class="section-label">Schwierigkeit</div>
+    <div class="preset-row">
+      <button class="btn-toggle" data-diff="easy">Leicht</button>
+      <button class="btn-toggle" data-diff="normal">Normal</button>
+      <button class="btn-toggle" data-diff="hard">Schwer</button>
+      <button class="btn-toggle danger-active" data-diff="apocalypse">Apokalypse</button>
+    </div>
+
+    <div class="section-label">Modus</div>
+    <div class="preset-row">
+      <button class="btn-toggle" data-mode="sim">📍 Simulation</button>
+      <button class="btn-toggle" data-mode="gps">🛰️ Echtes GPS</button>
+    </div>
+    <p class="hint" id="gpsHint">GPS folgt deiner echten Bewegung per Standortfreigabe. Funktioniert nur, wenn der Browser Standortzugriff erlaubt – klappt das in dieser Vorschau nicht, die Datei in einem eigenen Browser-Tab öffnen.</p>
+
+    <div class="row"><label>Gehgeschwindigkeit (Simulation)</label></div>
+    <div class="row"><input type="range" id="rSimSpeed" min="0.5" max="10" step="0.1"><span class="val" id="rSimSpeedVal"></span></div>
+
+    <button id="advToggle">▸ Erweiterte Einstellungen anzeigen</button>
+    <div id="advBody">
+      <div class="row"><label>Zombie-Spawnrate (Sek. zw. Spawns)</label></div>
+      <div class="row"><input type="range" id="rSpawn" min="3" max="40" step="1"><span class="val" id="rSpawnVal"></span></div>
+
+      <div class="row"><label>Zombie-Geschwindigkeit (m/s)</label></div>
+      <div class="row"><input type="range" id="rZSpeed" min="0.3" max="6" step="0.1"><span class="val" id="rZSpeedVal"></span></div>
+
+      <div class="row"><label>Maximale Zombies gleichzeitig</label></div>
+      <div class="row"><input type="range" id="rMaxZ" min="2" max="30" step="1"><span class="val" id="rMaxZVal"></span></div>
+
+      <div class="row"><label>Benötigtes Loot</label></div>
+      <div class="row"><input type="range" id="rLoot" min="1" max="30" step="1"><span class="val" id="rLootVal"></span></div>
+
+      <div class="row"><label>Suchradius (Spawnbereich, m)</label></div>
+      <div class="row"><input type="range" id="rRadius" min="80" max="1500" step="20"><span class="val" id="rRadiusVal"></span></div>
+
+      <div class="row"><label>Fangradius (m)</label></div>
+      <div class="row"><input type="range" id="rCatch" min="5" max="40" step="1"><span class="val" id="rCatchVal"></span></div>
+
+      <div class="row"><label>Sammelradius (m)</label></div>
+      <div class="row"><input type="range" id="rCollect" min="5" max="40" step="1"><span class="val" id="rCollectVal"></span></div>
+
+      <div class="row"><label>Leben</label></div>
+      <div class="row"><input type="range" id="rLives" min="1" max="8" step="1"><span class="val" id="rLivesVal"></span></div>
+
+      <div class="check-row">
+        <input type="checkbox" id="cPathOnly" class="pz-checkbox">
+        <label for="cPathOnly">Loot nur auf begehbaren Wegen</label>
+      </div>
+      <p class="hint">Lädt echte Fuß-/Radwege &amp; Straßen rund um deinen Startpunkt über OpenStreetMap. Klappt das nicht (z.B. kein Netz), wird zufällig platziert.</p>
+
+      <div class="check-row">
+        <input type="checkbox" id="cEndless" class="pz-checkbox">
+        <label for="cEndless">Endlosmodus (kein festes Ziel, nur Highscore)</label>
+      </div>
+    </div>
+
+    <button id="startBtn">▶ SPIEL STARTEN</button>
+    <p class="hint" id="startHint" style="text-align:center; margin-top:8px;">Tippe auf die Karte, um deinen Startpunkt zu wählen (oder dein Standort wird automatisch genutzt).</p>
+  </div>
+
+  <div id="pauseView" style="display:none;">
+    <h1 class="title">PAUSIERT</h1>
+    <p class="subtitle">DAS SPIEL STEHT STILL // ZOMBIES WARTEN NICHT WIRKLICH 😉</p>
+    <button id="resumeBtn" class="btn-toggle active" style="width:100%; padding:14px; font-size:15px;">▶ Fortsetzen</button>
+    <div class="btn-row2">
+      <button id="restartBtn" class="btn-secondary">🔁 Neustart</button>
+      <button id="quitBtn" class="btn-quit">✖ Beenden</button>
+    </div>
+  </div>
+</div>
+
+<div id="overlay-result">
+  <div class="result-card" id="resultCard">
+    <h2 id="resultTitle"></h2>
+    <div class="result-stats" id="resultStats"></div>
+    <div class="btn-row2">
+      <button id="playAgainBtn" class="btn-toggle active">🔁 Nochmal</button>
+      <button id="resultMenuBtn" class="btn-secondary">☰ Menü</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+(function(){
+"use strict";
+
+/* ======================= UTILS ======================= */
+const EARTH_R = 6371000;
+const toRad = d => d*Math.PI/180;
+const toDeg = r => r*180/Math.PI;
+function haversine(lat1,lng1,lat2,lng2){
+  const dLat=toRad(lat2-lat1), dLng=toRad(lng2-lng1);
+  const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+  return 2*EARTH_R*Math.asin(Math.min(1,Math.sqrt(a)));
+}
+function destPoint(lat,lng,distM,bearingDeg){
+  const br=toRad(bearingDeg), lat1=toRad(lat), lng1=toRad(lng), dR=distM/EARTH_R;
+  const lat2=Math.asin(Math.sin(lat1)*Math.cos(dR)+Math.cos(lat1)*Math.sin(dR)*Math.cos(br));
+  const lng2=lng1+Math.atan2(Math.sin(br)*Math.sin(dR)*Math.cos(lat1), Math.cos(dR)-Math.sin(lat1)*Math.sin(lat2));
+  return {lat: toDeg(lat2), lng: ((toDeg(lng2)+540)%360)-180};
+}
+function bearingBetween(lat1,lng1,lat2,lng2){
+  const y=Math.sin(toRad(lng2-lng1))*Math.cos(toRad(lat2));
+  const x=Math.cos(toRad(lat1))*Math.sin(toRad(lat2))-Math.sin(toRad(lat1))*Math.cos(toRad(lat2))*Math.cos(toRad(lng2-lng1));
+  return (toDeg(Math.atan2(y,x))+360)%360;
+}
+const randRange = (a,b) => a + Math.random()*(b-a);
+const uid = () => Math.random().toString(36).slice(2,9);
+function randomPointAround(lat,lng,minR,maxR){
+  const angle=randRange(0,360);
+  const r=Math.sqrt(randRange(minR*minR, Math.max(minR*minR+1,maxR*maxR)));
+  return destPoint(lat,lng,r,angle);
+}
+function sampleDistinct(arr,n){
+  const copy=arr.slice(), out=[];
+  while(copy.length && out.length<n){
+    const idx=Math.floor(Math.random()*copy.length);
+    out.push(copy.splice(idx,1)[0]);
+  }
+  return out;
+}
+const el = id => document.getElementById(id);
+function fmtTime(sec){
+  sec=Math.floor(sec);
+  const m=Math.floor(sec/60), s=sec%60;
+  return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+
+/* ======================= CONFIG ======================= */
+const DEFAULTS = {
+  simSpeed:1.4, zombieSpeed:1.0, spawnIntervalSec:14, maxZombies:8,
+  lootRequired:5, searchRadius:200, catchRadius:12, collectRadius:15,
+  lives:3, pathOnlyLoot:true, endless:false, mode:'sim'
+};
+const PRESETS = {
+  walk:{label:'Gehen', simSpeed:1.4, zombieSpeed:0.9, spawnIntervalSec:14, lootRequired:5,  searchRadius:200, maxZombies:8},
+  jog: {label:'Joggen', simSpeed:2.8, zombieSpeed:2.0, spawnIntervalSec:9,  lootRequired:8,  searchRadius:350, maxZombies:12},
+  bike:{label:'Radfahren', simSpeed:5.5, zombieSpeed:3.6, spawnIntervalSec:6,  lootRequired:12, searchRadius:600, maxZombies:16}
+};
+const DIFFICULTY = {
+  easy:{spawnMult:0.7, speedMult:0.75, livesBonus:1},
+  normal:{spawnMult:1, speedMult:1, livesBonus:0},
+  hard:{spawnMult:1.5, speedMult:1.25, livesBonus:0},
+  apocalypse:{spawnMult:2.4, speedMult:1.6, livesBonus:-1}
+};
+const TICK_MS=280;
+
+let settings = {...DEFAULTS, ...PRESETS.walk};
+let activePreset='walk', activeDifficulty='normal', presetBase=null;
+let bestScore=null;
+let mapTheme='dark';
+
+/* ======================= STATE ======================= */
+let status='menu'; // menu | playing | paused | won | lost
+const state = {
+  player:{lat:null,lng:null},
+  startPoint:null,
+  moveTarget:null,
+  walkedDistance:0,
+  lootCollected:0,
+  livesLeft:3,
+  invulnerableUntil:0
+};
+let elapsedSec=0;
+let gameTimer=null, spawnTimer=null, gpsWatchId=null;
+const zombies=new Map();
+const loot=new Map();
+let lastFlatPoints=[];
+
+/* ======================= MAP ======================= */
+let map, playerMarker, startPreviewMarker, tileLayer;
+const TILE_DARK='https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const TILE_LIGHT='https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+const TILE_ATTR='&copy; OpenStreetMap-Mitwirkende &copy; CARTO';
+
+function initMap(){
+  map=L.map('map',{zoomControl:false, attributionControl:true, worldCopyJump:true}).setView([52.5219,13.4132],16);
+  L.control.zoom({position:'bottomright'}).addTo(map);
+  map.on('click', onMapClick);
+
+  const prefersDark = !window.matchMedia || window.matchMedia('(prefers-color-scheme: dark)').matches;
+  setMapTheme(prefersDark ? 'dark' : 'light');
+
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(pos=>{
+      setStartPoint(pos.coords.latitude, pos.coords.longitude);
+      map.flyTo([pos.coords.latitude,pos.coords.longitude],17);
+    }, ()=>{ /* keep fallback location, user can tap map */ }, {timeout:8000, enableHighAccuracy:true});
+  }
+}
+function setMapTheme(theme){
+  mapTheme=theme;
+  if(tileLayer) map.removeLayer(tileLayer);
+  tileLayer=L.tileLayer(theme==='dark'?TILE_DARK:TILE_LIGHT,{subdomains:'abcd',maxZoom:20,attribution:TILE_ATTR}).addTo(map);
+  tileLayer.bringToBack();
+  el('themeBtn').textContent = theme==='dark' ? '☀️' : '🌙';
+  el('themeBtn').title = theme==='dark' ? 'Zu heller, bunter Karte wechseln' : 'Zu dunkler Karte wechseln';
+}
+function onMapClick(e){
+  if(status==='menu'){
+    setStartPoint(e.latlng.lat, e.latlng.lng);
+  } else if(status==='playing' && settings.mode==='sim'){
+    state.moveTarget={lat:e.latlng.lat, lng:e.latlng.lng};
+  }
+}
+function setStartPoint(lat,lng){
+  state.startPoint={lat,lng};
+  if(startPreviewMarker) map.removeLayer(startPreviewMarker);
+  startPreviewMarker=L.marker([lat,lng],{icon:L.divIcon({className:'',html:'<div class="pz-start-pin"></div>',iconSize:[22,22],iconAnchor:[11,20]})}).addTo(map);
+}
+function removeStartPreview(){
+  if(startPreviewMarker){ map.removeLayer(startPreviewMarker); startPreviewMarker=null; }
+}
+function playerIcon(){
+  return L.divIcon({className:'', html:'<div class="pz-player"><div class="pz-player-pulse"></div><div class="pz-player-dot"></div></div>', iconSize:[26,26], iconAnchor:[13,13]});
+}
+function zombieIcon(){
+  return L.divIcon({className:'', html:'<div class="pz-zombie">🧟</div>', iconSize:[26,26], iconAnchor:[13,13]});
+}
+function lootIcon(){
+  return L.divIcon({className:'', html:'<div class="pz-loot">🎒</div>', iconSize:[24,24], iconAnchor:[12,12]});
+}
+function ensurePlayerMarker(){
+  if(playerMarker) map.removeLayer(playerMarker);
+  playerMarker=L.marker([state.player.lat,state.player.lng],{icon:playerIcon(), zIndexOffset:1000}).addTo(map);
+}
+
+/* ======================= TOASTS / FX ======================= */
+function toast(msg,type){
+  const t=document.createElement('div');
+  t.className='toast '+(type||'');
+  t.textContent=msg;
+  el('toast-container').appendChild(t);
+  setTimeout(()=>t.remove(), 3100);
+}
+function flashDanger(){
+  const f=el('danger-flash');
+  f.classList.add('flash');
+  setTimeout(()=>f.classList.remove('flash'), 220);
+}
+
+/* ======================= OVERPASS (begehbare Wege) ======================= */
+async function fetchPathPoints(lat,lng,radius){
+  const query='[out:json][timeout:20];way["highway"~"^(footway|path|pedestrian|residential|living_street|cycleway|track|unclassified|service|tertiary|secondary|primary)$"](around:'+radius+','+lat+','+lng+');out geom;';
+  const url='https://overpass-api.de/api/interpreter?data='+encodeURIComponent(query);
+  try{
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(), 9000);
+    const res=await fetch(url,{signal:ctrl.signal});
+    clearTimeout(t);
+    if(!res.ok) return [];
+    const data=await res.json();
+    const pts=[];
+    (data.elements||[]).forEach(elem=>{
+      if(elem.geometry) elem.geometry.forEach(g=>pts.push({lat:g.lat, lng:g.lon}));
+    });
+    return pts;
+  }catch(err){
+    return [];
+  }
+}
+
+/* ======================= LOOT ======================= */
+async function setupLoot(){
+  loot.forEach(l=>map.removeLayer(l.marker));
+  loot.clear();
+  const count=settings.lootRequired;
+  let points=[];
+  if(settings.pathOnlyLoot){
+    toast('Lade begehbare Wege …','warn');
+    lastFlatPoints=await fetchPathPoints(state.startPoint.lat, state.startPoint.lng, settings.searchRadius);
+    if(lastFlatPoints.length>0){
+      points=sampleDistinct(lastFlatPoints, count);
+      if(points.length<count){
+        const extra=count-points.length;
+        for(let i=0;i<extra;i++) points.push(randomPointAround(state.startPoint.lat,state.startPoint.lng,15,settings.searchRadius));
+      }
+      toast(points.length+' Loot-Punkte auf echten Wegen platziert','success');
+    } else {
+      toast('Keine Wege gefunden – Loot wird zufällig platziert','warn');
+      for(let i=0;i<count;i++) points.push(randomPointAround(state.startPoint.lat,state.startPoint.lng,15,settings.searchRadius));
+    }
+  } else {
+    lastFlatPoints=[];
+    for(let i=0;i<count;i++) points.push(randomPointAround(state.startPoint.lat,state.startPoint.lng,15,settings.searchRadius));
+  }
+  points.forEach(p=>{
+    const id=uid();
+    const marker=L.marker([p.lat,p.lng],{icon:lootIcon()}).addTo(map);
+    loot.set(id,{lat:p.lat,lng:p.lng,marker});
+  });
+}
+function spawnReplacementLoot(){
+  let p;
+  if(settings.pathOnlyLoot && lastFlatPoints.length>0){
+    p=lastFlatPoints[Math.floor(Math.random()*lastFlatPoints.length)];
+  } else {
+    p=randomPointAround(state.startPoint.lat,state.startPoint.lng,15,settings.searchRadius);
+  }
+  const id=uid();
+  const marker=L.marker([p.lat,p.lng],{icon:lootIcon()}).addTo(map);
+  loot.set(id,{lat:p.lat,lng:p.lng,marker});
+}
+
+/* ======================= ZOMBIES ======================= */
+function clearAllZombies(){
+  zombies.forEach(z=>map.removeLayer(z.marker));
+  zombies.clear();
+}
+function spawnZombie(){
+  if(zombies.size<settings.maxZombies){
+    const p=randomPointAround(state.player.lat,state.player.lng, settings.searchRadius*0.6, settings.searchRadius*1.1);
+    const id=uid();
+    const marker=L.marker([p.lat,p.lng],{icon:zombieIcon()}).addTo(map);
+    zombies.set(id,{id,lat:p.lat,lng:p.lng,marker,wanderTarget:null});
+  }
+  scheduleNextSpawn();
+}
+function scheduleNextSpawn(){
+  clearTimeout(spawnTimer);
+  if(status!=='playing') return;
+  const base=settings.spawnIntervalSec*1000;
+  const delay=Math.max(1200, base + randRange(-base*0.35, base*0.35));
+  spawnTimer=setTimeout(spawnZombie, delay);
+}
+function updateZombie(z,dt){
+  const dist=haversine(z.lat,z.lng,state.player.lat,state.player.lng);
+  const detectR=settings.searchRadius*0.85;
+  let bearing, speed;
+  if(dist<detectR){
+    bearing=bearingBetween(z.lat,z.lng,state.player.lat,state.player.lng) + randRange(-8,8);
+    speed=settings.zombieSpeed;
+  } else {
+    if(!z.wanderTarget || haversine(z.lat,z.lng,z.wanderTarget.lat,z.wanderTarget.lng)<5){
+      z.wanderTarget=randomPointAround(z.lat,z.lng,20,80);
+    }
+    bearing=bearingBetween(z.lat,z.lng,z.wanderTarget.lat,z.wanderTarget.lng);
+    speed=settings.zombieSpeed*0.4;
+  }
+  const np=destPoint(z.lat,z.lng,speed*dt,bearing);
+  z.lat=np.lat; z.lng=np.lng;
+  z.marker.setLatLng([z.lat,z.lng]);
+  const despawnR=settings.searchRadius*2.4;
+  if(haversine(z.lat,z.lng,state.player.lat,state.player.lng)>despawnR){
+    map.removeLayer(z.marker);
+    zombies.delete(z.id);
+  }
+}
+
+/* ======================= INPUT: JOYSTICK + KEYS ======================= */
+const joystick={pointerDown:false, bearing:0, magnitude:0};
+const KEY_BEARING={ArrowUp:0,ArrowDown:180,ArrowLeft:270,ArrowRight:90,w:0,s:180,a:270,d:90,W:0,S:180,A:270,D:90};
+const activeKeys=new Set();
+function initJoystick(){
+  const base=el('joyBase'), knob=el('joyKnob');
+  let rect=null;
+  function applyPoint(clientX,clientY){
+    const cx=rect.left+rect.width/2, cy=rect.top+rect.height/2;
+    const dx=clientX-cx, dy=clientY-cy;
+    const maxR=rect.width/2;
+    const dist=Math.min(Math.hypot(dx,dy), maxR);
+    const angle=Math.atan2(dy,dx);
+    knob.style.transform='translate('+(Math.cos(angle)*dist)+'px,'+(Math.sin(angle)*dist)+'px)';
+    joystick.magnitude=dist/maxR;
+    joystick.bearing=(toDeg(Math.atan2(dx,-dy))+360)%360;
+  }
+  function start(clientX,clientY){ rect=base.getBoundingClientRect(); joystick.pointerDown=true; applyPoint(clientX,clientY); }
+  function end(){ joystick.pointerDown=false; joystick.magnitude=0; knob.style.transform='translate(0,0)'; }
+  base.addEventListener('mousedown', e=>{
+    start(e.clientX,e.clientY);
+    const mm=ev=>applyPoint(ev.clientX,ev.clientY);
+    const mu=()=>{ end(); window.removeEventListener('mousemove',mm); window.removeEventListener('mouseup',mu); };
+    window.addEventListener('mousemove',mm); window.addEventListener('mouseup',mu);
+  });
+  base.addEventListener('touchstart', e=>{ const t=e.touches[0]; start(t.clientX,t.clientY); }, {passive:true});
+  base.addEventListener('touchmove', e=>{ const t=e.touches[0]; applyPoint(t.clientX,t.clientY); e.preventDefault(); }, {passive:false});
+  base.addEventListener('touchend', end);
+  base.addEventListener('touchcancel', end);
+
+  window.addEventListener('keydown', e=>{ if(KEY_BEARING[e.key]!==undefined){ activeKeys.add(e.key); } });
+  window.addEventListener('keyup', e=>{ if(KEY_BEARING[e.key]!==undefined){ activeKeys.delete(e.key); } });
+}
+function getInputVector(){
+  if(joystick.pointerDown && joystick.magnitude>0.15){
+    return {bearing:joystick.bearing, magnitude:joystick.magnitude};
+  }
+  if(activeKeys.size>0){
+    let vx=0, vy=0;
+    activeKeys.forEach(k=>{ const b=toRad(KEY_BEARING[k]); vx+=Math.sin(b); vy+=-Math.cos(b); });
+    if(vx||vy) return {bearing:(toDeg(Math.atan2(vx,-vy))+360)%360, magnitude:1};
+  }
+  return null;
+}
+
+/* ======================= GAME LOOP ======================= */
+function moveSimPlayer(dt){
+  const input=getInputVector();
+  let bearing=null, distStep=settings.simSpeed*dt;
+  if(input){
+    bearing=input.bearing;
+    distStep*=input.magnitude;
+  } else if(state.moveTarget){
+    const d=haversine(state.player.lat,state.player.lng,state.moveTarget.lat,state.moveTarget.lng);
+    if(d<1){ state.moveTarget=null; }
+    else {
+      bearing=bearingBetween(state.player.lat,state.player.lng,state.moveTarget.lat,state.moveTarget.lng);
+      if(d<distStep) distStep=d;
+    }
+  }
+  if(bearing!==null && distStep>0){
+    const np=destPoint(state.player.lat,state.player.lng,distStep,bearing);
+    state.walkedDistance+=distStep;
+    state.player.lat=np.lat; state.player.lng=np.lng;
+  }
+}
+function checkCatch(){
+  if(performance.now()<state.invulnerableUntil) return;
+  zombies.forEach((z,id)=>{
+    if(haversine(z.lat,z.lng,state.player.lat,state.player.lng)<settings.catchRadius){
+      state.livesLeft--;
+      state.invulnerableUntil=performance.now()+3000;
+      map.removeLayer(z.marker); zombies.delete(id);
+      flashDanger();
+      toast('Ein Zombie hat dich erwischt! Noch '+Math.max(0,state.livesLeft)+' Leben','danger');
+    }
+  });
+}
+function checkLoot(){
+  loot.forEach((l,id)=>{
+    if(haversine(l.lat,l.lng,state.player.lat,state.player.lng)<settings.collectRadius){
+      map.removeLayer(l.marker); loot.delete(id);
+      state.lootCollected++;
+      toast('Loot eingesammelt! ('+state.lootCollected+'/'+(settings.endless?'∞':settings.lootRequired)+')','success');
+      if(settings.endless) spawnReplacementLoot();
+    }
+  });
+}
+function checkWinLose(){
+  if(state.livesLeft<=0){ endGame('lost'); return; }
+  if(!settings.endless && state.lootCollected>=settings.lootRequired){ endGame('won'); }
+}
+function updateHUD(){
+  el('hudLoot').textContent=state.lootCollected+'/'+(settings.endless?'∞':settings.lootRequired);
+  el('hearts').textContent='❤️'.repeat(Math.max(0,state.livesLeft))+'🖤'.repeat(Math.max(0,settings.lives-state.livesLeft));
+  el('hudTimer').textContent=fmtTime(elapsedSec);
+}
+function tick(){
+  if(status!=='playing') return;
+  const dt=TICK_MS/1000;
+  elapsedSec+=dt;
+  if(settings.mode==='sim') moveSimPlayer(dt);
+  zombies.forEach(z=>updateZombie(z,dt));
+  checkCatch();
+  checkLoot();
+  if(playerMarker) playerMarker.setLatLng([state.player.lat,state.player.lng]);
+  map.panTo([state.player.lat,state.player.lng],{animate:true, duration:TICK_MS/1000, easeLinearity:1});
+  updateHUD();
+  checkWinLose();
+}
+function startLoops(){
+  gameTimer=setInterval(tick, TICK_MS);
+  scheduleNextSpawn();
+}
+function stopLoops(){
+  clearInterval(gameTimer); clearTimeout(spawnTimer);
+  gameTimer=null; spawnTimer=null;
+}
+
+/* ======================= GPS MODE ======================= */
+function startGpsWatch(){
+  if(!navigator.geolocation){
+    toast('GPS nicht verfügbar – wechsle zu Simulation','warn');
+    settings.mode='sim'; document.body.dataset.mode='sim';
+    return;
+  }
+  gpsWatchId=navigator.geolocation.watchPosition(pos=>{
+    const {latitude,longitude}=pos.coords;
+    if(state.player.lat!=null) state.walkedDistance+=haversine(state.player.lat,state.player.lng,latitude,longitude);
+    state.player.lat=latitude; state.player.lng=longitude;
+  }, ()=>{
+    toast('GPS-Zugriff nicht möglich – wechsle zu Simulation','warn');
+    settings.mode='sim'; document.body.dataset.mode='sim';
+    stopGpsWatch();
+  }, {enableHighAccuracy:true, maximumAge:2000, timeout:10000});
+}
+function stopGpsWatch(){
+  if(gpsWatchId!=null){ navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId=null; }
+}
+
+/* ======================= GAME FLOW ======================= */
+async function startGame(){
+  if(!state.startPoint){
+    const c=map.getCenter();
+    state.startPoint={lat:c.lat, lng:c.lng};
+  }
+  state.player.lat=state.startPoint.lat;
+  state.player.lng=state.startPoint.lng;
+  state.livesLeft=settings.lives;
+  state.lootCollected=0;
+  state.walkedDistance=0;
+  state.moveTarget=null;
+  state.invulnerableUntil=0;
+  elapsedSec=0;
+
+  removeStartPreview();
+  ensurePlayerMarker();
+  clearAllZombies();
+  el('startBtn').disabled=true; el('startBtn').textContent='LADE …';
+  await setupLoot();
+  el('startBtn').disabled=false; el('startBtn').textContent='▶ SPIEL STARTEN';
+
+  status='playing';
+  document.body.dataset.status='playing';
+  document.body.dataset.mode=settings.mode;
+  if(settings.mode==='gps') startGpsWatch();
+  startLoops();
+  saveSettings();
+}
+function pauseGame(){
+  status='paused';
+  document.body.dataset.status='paused';
+  stopLoops();
+  el('menuView').style.display='none';
+  el('pauseView').style.display='block';
+}
+function resumeGame(){
+  status='playing';
+  document.body.dataset.status='playing';
+  startLoops();
+}
+function quitGame(){
+  stopLoops(); stopGpsWatch();
+  clearAllZombies();
+  loot.forEach(l=>map.removeLayer(l.marker)); loot.clear();
+  status='menu';
+  document.body.dataset.status='menu';
+  el('menuView').style.display='block';
+  el('pauseView').style.display='none';
+  setStartPoint(state.player.lat, state.player.lng);
+}
+function endGame(result){
+  status=result;
+  document.body.dataset.status='menu';
+  stopLoops(); stopGpsWatch();
+  updateBestScore();
+  showResult(result);
+}
+function showResult(result){
+  const card=el('resultCard');
+  card.className='result-card '+(result==='won'?'win':'lose');
+  el('resultTitle').textContent=result==='won' ? '🎉 GESCHAFFT!' : '💀 ERWISCHT!';
+  el('resultStats').innerHTML=
+    'Loot gesammelt: <b>'+state.lootCollected+'</b><br>'+
+    'Überlebenszeit: <b>'+fmtTime(elapsedSec)+'</b><br>'+
+    'Distanz: <b>'+(state.walkedDistance/1000).toFixed(2)+' km</b><br>'+
+    'Modus: <b>'+PRESETS[activePreset].label+' / '+activeDifficulty+'</b>';
+  el('overlay-result').classList.add('open');
+}
+
+/* ======================= SETTINGS UI ======================= */
+function applyPreset(name){
+  activePreset=name;
+  presetBase={...DEFAULTS, ...PRESETS[name]};
+  applyDifficulty(activeDifficulty, true);
+  refreshSettingsUI();
+}
+function applyDifficulty(name, skipRefresh){
+  activeDifficulty=name;
+  const d=DIFFICULTY[name];
+  const base=presetBase || {...DEFAULTS, ...PRESETS[activePreset]};
+  settings.simSpeed=base.simSpeed;
+  settings.zombieSpeed=+(base.zombieSpeed*d.speedMult).toFixed(2);
+  settings.spawnIntervalSec=+(base.spawnIntervalSec/d.spawnMult).toFixed(1);
+  settings.maxZombies=base.maxZombies;
+  settings.lootRequired=base.lootRequired;
+  settings.searchRadius=base.searchRadius;
+  settings.lives=Math.max(1, DEFAULTS.lives + d.livesBonus);
+  if(!skipRefresh) refreshSettingsUI();
+}
+function markCustom(){
+  document.querySelectorAll('[data-preset]').forEach(b=>b.classList.remove('active'));
+}
+function refreshSettingsUI(){
+  document.querySelectorAll('[data-preset]').forEach(b=>b.classList.toggle('active', b.dataset.preset===activePreset));
+  document.querySelectorAll('[data-diff]').forEach(b=>b.classList.toggle('active', b.dataset.diff===activeDifficulty));
+  document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active', b.dataset.mode===settings.mode));
+  el('gpsHint').style.display = settings.mode==='gps' ? 'block' : 'none';
+
+  el('rSimSpeed').value=settings.simSpeed; el('rSimSpeedVal').textContent=settings.simSpeed+' m/s';
+  el('rSpawn').value=settings.spawnIntervalSec; el('rSpawnVal').textContent=settings.spawnIntervalSec+'s';
+  el('rZSpeed').value=settings.zombieSpeed; el('rZSpeedVal').textContent=settings.zombieSpeed+' m/s';
+  el('rMaxZ').value=settings.maxZombies; el('rMaxZVal').textContent=settings.maxZombies;
+  el('rLoot').value=settings.lootRequired; el('rLootVal').textContent=settings.lootRequired;
+  el('rRadius').value=settings.searchRadius; el('rRadiusVal').textContent=settings.searchRadius+' m';
+  el('rCatch').value=settings.catchRadius; el('rCatchVal').textContent=settings.catchRadius+' m';
+  el('rCollect').value=settings.collectRadius; el('rCollectVal').textContent=settings.collectRadius+' m';
+  el('rLives').value=settings.lives; el('rLivesVal').textContent=settings.lives;
+  el('cPathOnly').checked=settings.pathOnlyLoot;
+  el('cEndless').checked=settings.endless;
+}
+function bindSettingsUI(){
+  document.querySelectorAll('[data-preset]').forEach(b=>b.addEventListener('click',()=>applyPreset(b.dataset.preset)));
+  document.querySelectorAll('[data-diff]').forEach(b=>b.addEventListener('click',()=>applyDifficulty(b.dataset.diff)));
+  document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{
+    settings.mode=b.dataset.mode; document.body.dataset.mode=settings.mode; refreshSettingsUI();
+  }));
+
+  el('advToggle').addEventListener('click',()=>{
+    const body=el('advBody'); const open=body.classList.toggle('open');
+    el('advToggle').textContent=(open?'▾':'▸')+' Erweiterte Einstellungen '+(open?'verbergen':'anzeigen');
+  });
+
+  const bind=(id,key,parse,suffix)=>{
+    el(id).addEventListener('input',e=>{
+      settings[key]=parse(e.target.value);
+      el(id+'Val').textContent=e.target.value+(suffix||'');
+      markCustom();
+    });
+  };
+  bind('rSimSpeed','simSpeed',parseFloat,' m/s');
+  bind('rSpawn','spawnIntervalSec',parseFloat,'s');
+  bind('rZSpeed','zombieSpeed',parseFloat,' m/s');
+  bind('rMaxZ','maxZombies',v=>parseInt(v,10));
+  bind('rLoot','lootRequired',v=>parseInt(v,10));
+  bind('rRadius','searchRadius',v=>parseInt(v,10),' m');
+  bind('rCatch','catchRadius',v=>parseInt(v,10),' m');
+  bind('rCollect','collectRadius',v=>parseInt(v,10),' m');
+  bind('rLives','lives',v=>parseInt(v,10));
+
+  el('cPathOnly').addEventListener('change',e=>{ settings.pathOnlyLoot=e.target.checked; markCustom(); });
+  el('cEndless').addEventListener('change',e=>{ settings.endless=e.target.checked; markCustom(); });
+
+  el('startBtn').addEventListener('click', startGame);
+  el('pauseBtn').addEventListener('click', pauseGame);
+  el('resumeBtn').addEventListener('click', resumeGame);
+  el('restartBtn').addEventListener('click', ()=>{ el('pauseView').style.display='none'; el('menuView').style.display='block'; quitGame(); startGame(); });
+  el('quitBtn').addEventListener('click', quitGame);
+  el('playAgainBtn').addEventListener('click', ()=>{ el('overlay-result').classList.remove('open'); startGame(); });
+  el('resultMenuBtn').addEventListener('click', ()=>{ el('overlay-result').classList.remove('open'); quitGame(); });
+
+  el('infoBtn').addEventListener('click', ()=>el('legend').classList.toggle('open'));
+  el('themeBtn').addEventListener('click', ()=>setMapTheme(mapTheme==='dark'?'light':'dark'));
+  el('reopenTab').addEventListener('click', pauseGame);
+}
+
+/* ======================= PERSISTENCE ======================= */
+function saveSettings(){
+  try{
+    const data = {
+      settings: settings,
+      activePreset: activePreset,
+      activeDifficulty: activeDifficulty
+    };
+    localStorage.setItem('pz_settings', JSON.stringify(data));
+  }catch(e){ console.error(e); }
+}
+
+function loadSettings(){
+  try{
+    const res = localStorage.getItem('pz_settings');
+    if(res){
+      const data = JSON.parse(res);
+      Object.assign(settings, data.settings);
+      activePreset = data.activePreset || 'walk';
+      activeDifficulty = data.activeDifficulty || 'normal';
+      presetBase = {...DEFAULTS, ...PRESETS[activePreset]};
+    }
+  }catch(e){ /* kein Speicherstand */ }
+  
+  // WICHTIG: Zwinge die Checkboxen, die echten Werte zu übernehmen
+  settings.pathOnlyLoot = el('cPathOnly').checked;
+  settings.endless = el('cEndless').checked;
+  
+  document.body.dataset.mode = settings.mode;
+  refreshSettingsUI();
+}
+
+function updateBestScore(){
+  try{
+    let isBest = false;
+    if(!bestScore || state.lootCollected > bestScore.loot || (state.lootCollected === bestScore.loot && elapsedSec > bestScore.time)){
+      bestScore = {loot: state.lootCollected, time: elapsedSec, preset: activePreset};
+      isBest = true;
+    }
+    if(isBest) localStorage.setItem('pz_highscore', JSON.stringify(bestScore));
+    renderBestLine();
+  }catch(e){ /* ignore */ }
+}
+
+function loadBestScore(){
+  try{
+    const res = localStorage.getItem('pz_highscore');
+    if(res) bestScore = JSON.parse(res);
+  }catch(e){ /* none yet */ }
+  renderBestLine();
+}
+
+
+/* ======================= INIT ======================= */
+function init(){
+  initMap();
+  initJoystick();
+  bindSettingsUI();
+  applyPreset('walk');
+  loadSettings();
+  loadBestScore();
+}
+document.addEventListener('DOMContentLoaded', init);
+})();
+</script>
+</body>
+</html>
